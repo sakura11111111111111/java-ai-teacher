@@ -1,6 +1,7 @@
 import streamlit as st
 import google.generativeai as genai
 import time
+import json
 
 # --- 页面基础配置 ---
 st.set_page_config(
@@ -12,11 +13,21 @@ st.set_page_config(
 # --- AI模型配置 ---
 # 从Streamlit Secrets获取API密钥
 try:
+    # 检查密钥是否存在
+    if "API_KEY" not in st.secrets or not st.secrets["API_KEY"]:
+        st.error("AI服务未配置！请在Streamlit的'Settings -> Secrets'中设置'API_KEY'。")
+        st.stop()
+        
     api_key = st.secrets["API_KEY"]
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    # --- 【重要修改】 ---
+    # 将模型从 'gemini-1.5-flash' 更换为更稳定、广泛可用的 'gemini-pro'
+    model = genai.GenerativeModel('gemini-pro')
+    # --- 【修改结束】 ---
+
 except Exception as e:
-    st.error("AI服务未配置！请检查Streamlit Secrets中是否已正确设置API_KEY。")
+    st.error(f"AI服务初始化失败！请检查API密钥是否有效。错误: {e}")
     st.stop()
 
 
@@ -28,7 +39,7 @@ def generate_content(prompt):
             response = model.generate_content(prompt)
             return response.text
         except Exception as e:
-            st.error(f"AI生成失败，请稍后重试。错误信息: {e}")
+            st.error(f"AI生成失败，请稍后重试。可能是API调用频率限制或内容安全策略导致。错误信息: {e}")
             return None
 
 # --- UI界面 ---
@@ -101,7 +112,7 @@ with tab2:
     original_code = st.text_area("在此粘贴原始Java代码:", height=300, placeholder="public class YourClass {\n  // ...\n}")
 
     if st.button("✨ 生成优化代码与解读", key="tab2_generate"):
-        if not original_code:
+        if not original_code.strip():
             st.warning("请输入原始代码。")
         else:
             prompt = f"""
@@ -131,25 +142,29 @@ with tab2:
             """
             response_text = generate_content(prompt)
             if response_text:
-                # 解析AI返回的内容
                 try:
-                    optimized_part = response_text.split("### 优化解读")[0]
-                    explanation_part = "### 优化解读" + response_text.split("### 优化解读")[1]
+                    parts = response_text.split("### 优化解读")
+                    if len(parts) == 2:
+                        optimized_part = parts[0]
+                        explanation_part = "### 优化解读" + parts[1]
 
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.subheader("原始代码")
-                        st.code(original_code, language='java')
-                    with col2:
-                        st.subheader("优化后的代码")
-                        st.markdown(optimized_part)
-                    
-                    st.divider()
-                    st.markdown(explanation_part)
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.subheader("原始代码")
+                            st.code(original_code, language='java')
+                        with col2:
+                            st.subheader("优化后的代码")
+                            st.markdown(optimized_part)
+                        
+                        st.divider()
+                        st.markdown(explanation_part)
+                    else:
+                        st.error("AI返回格式有误，无法解析。")
+                        st.text(response_text)
 
                 except Exception as e:
-                    st.error("AI返回格式有误，无法解析。")
-                    st.text(response_text) # 显示原始返回内容以供调试
+                    st.error(f"解析AI返回内容时出错: {e}")
+                    st.text(response_text)
 
 
 # --- 模块3：模式闯关 ---
@@ -159,18 +174,16 @@ with tab3:
 
     if 'quiz_data' not in st.session_state:
         st.session_state.quiz_data = None
-    if 'quiz_answered' not in st.session_state:
-        st.session_state.quiz_answered = False
 
     if st.button("闯关开始 / 下一题", key="tab3_generate"):
-        st.session_state.quiz_answered = False
+        st.session_state.quiz_data = None # 重置题目
         prompt = """
         作为一名Java面试官，请为我出一道关于创建型设计模式（工厂方法、单例、原型）的选择题。
         要求：
-        1.  **场景描述**: 描述一个常见的软件开发场景，其中隐含了某个设计问题。
-        2.  **问题**: 提出问题：“在这种情况下，最适合使用哪种设计模式来解决问题？”
-        3.  **选项**: 提供三个选项，A是正确答案，B和C是具有迷惑性的干扰项。
-        4.  **答案与解析**: 给出正确答案，并提供详细解析。解析需要解释为什么正确答案是合适的，以及为什么另外两个干扰项不合适。解析要通俗易懂。
+        1.  场景描述: 描述一个常见的软件开发场景，其中隐含了某个设计问题。
+        2.  问题: 提出问题：“在这种情况下，最适合使用哪种设计模式来解决问题？”
+        3.  选项: 提供三个选项，一个是正确答案，另外两个是具有迷惑性的干扰项。
+        4.  答案与解析: 给出正确答案的键（例如A, B, C），并提供详细解析。解析需要解释为什么正确答案是合适的，以及为什么另外两个干扰项不合适。解析要通俗易懂。
 
         请严格按照以下JSON格式输出，不要有任何多余的文字或代码块标记：
         {
@@ -184,46 +197,59 @@ with tab3:
           "answer": "A",
           "explanation": {
             "correct": "这里解释为什么A是正确的...",
-            "incorrect_b": "这里解释为什么B是错误的...",
-            "incorrect_c": "这里解释为什么C是错误的..."
+            "incorrect_B": "这里解释为什么B是错误的...",
+            "incorrect_C": "这里解释为什么C是错误的..."
           }
         }
         """
         response_text = generate_content(prompt)
-        try:
-            # 清理可能的Markdown标记
-            if response_text.startswith("```json"):
-                response_text = response_text[7:-4]
-            st.session_state.quiz_data = eval(response_text.replace("true", "True").replace("false", "False")) # 使用eval代替json.loads以获得更大灵活性
-        except Exception as e:
-            st.error(f"题目生成失败，AI返回格式错误，请重试。错误: {e}")
-            st.text(response_text) # 打印原始返回，方便排查
-            st.session_state.quiz_data = None
+        if response_text:
+            try:
+                # 清理可能的Markdown标记
+                clean_text = response_text.strip().replace("```json", "").replace("```", "")
+                st.session_state.quiz_data = json.loads(clean_text)
+            except json.JSONDecodeError as e:
+                st.error(f"题目生成失败，AI返回的JSON格式错误，请重试。错误: {e}")
+                st.text("收到的原始文本:\n" + response_text)
+                st.session_state.quiz_data = None
 
     if st.session_state.quiz_data:
         q = st.session_state.quiz_data
-        st.markdown(f"**场景：** {q['scene']}")
-        st.markdown(f"**问题：** {q['question']}")
         
-        options_list = [f"{key}: {value}" for key, value in q['options'].items()]
-        user_choice = st.radio("请选择你的答案:", options_list, key=f"quiz_{time.time()}", index=None)
+        # 确保数据结构完整
+        if all(k in q for k in ['scene', 'question', 'options', 'answer', 'explanation']):
+            st.markdown(f"**场景：** {q['scene']}")
+            st.markdown(f"**问题：** {q['question']}")
+            
+            # 使用唯一key来重置选项
+            radio_key = f"quiz_{q['scene']}" 
+            
+            options_list = [f"{key}: {value}" for key, value in q['options'].items()]
+            user_choice = st.radio("请选择你的答案:", options_list, key=radio_key, index=None)
 
-        if user_choice:
-            st.session_state.quiz_answered = True
-            user_answer_key = user_choice.split(":")
+            if user_choice:
+                user_answer_key = user_choice.split(":")[0]
 
-            if user_answer_key == q['answer']:
-                st.success(f"回答正确！🎉 正确答案是 **{q['answer']}**。")
-            else:
-                st.error(f"回答错误！😥 正确答案是 **{q['answer']}**。")
+                if user_answer_key == q['answer']:
+                    st.success(f"回答正确！🎉 正确答案是 **{q['answer']}**。")
+                else:
+                    st.error(f"回答错误！😥 正确答案是 **{q['answer']}**。")
 
-            with st.expander("**查看详细解析**"):
-                st.markdown(f"✔️ **为什么选 {q['answer']} ({q['options'][q['answer']]})？**")
-                st.write(q['explanation']['correct'])
-                
-                other_options = [k for k in q['options'].keys() if k != q['answer']]
-                st.markdown(f"---")
-                st.markdown(f"❌ **为什么不选 {other_options} ({q['options'][other_options]})？**")
-                st.write(q['explanation'][f'incorrect_{other_options.lower()}'])
-                st.markdown(f"❌ **为什么不选 {other_options} ({q['options'][other_options]})？**")
-                st.write(q['explanation'][f'incorrect_{other_options.lower()}'])
+                with st.expander("**查看详细解析**"):
+                    st.markdown(f"✔️ **为什么选 {q['answer']} ({q['options'][q['answer']]})？**")
+                    st.write(q['explanation']['correct'])
+                    
+                    for key, value in q['options'].items():
+                        if key != q['answer']:
+                            explanation_key = f"incorrect_{key.upper()}"
+                            # 兼容大小写
+                            if explanation_key not in q['explanation']:
+                                explanation_key = f"incorrect_{key.lower()}"
+                            
+                            if explanation_key in q['explanation']:
+                                st.markdown(f"---")
+                                st.markdown(f"❌ **为什么不选 {key} ({value})？**")
+                                st.write(q['explanation'][explanation_key])
+
+        else:
+            st.error("AI返回的题目数据结构不完整，请尝试重新生成。")
