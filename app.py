@@ -1,5 +1,5 @@
 import streamlit as st
-import google.generativeai as genai
+from zhipuai import ZhipuAI  # 导入智谱AI的库
 import time
 import json
 
@@ -10,39 +10,39 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- AI模型配置 ---
-# 从Streamlit Secrets获取API密钥
+# --- AI模型配置 (更换为智谱AI) ---
 try:
     # 检查密钥是否存在
-    if "API_KEY" not in st.secrets or not st.secrets["API_KEY"]:
-        st.error("AI服务未配置！请在Streamlit的'Settings -> Secrets'中设置'API_KEY'。")
+    if "ZHIPU_API_KEY" not in st.secrets or not st.secrets["ZHIPU_API_KEY"]:
+        st.error("AI服务未配置！请在Streamlit的'Settings -> Secrets'中设置'ZHIPU_API_KEY'。")
         st.stop()
         
-    api_key = st.secrets["API_KEY"]
-    genai.configure(api_key=api_key)
-    
-    # --- 【重要修改】 ---
-    # 将模型从 'gemini-1.5-flash' 更换为更稳定、广泛可用的 'gemini-pro'
-    model = genai.GenerativeModel('gemini-pro')
-    # --- 【修改结束】 ---
+    # 从Streamlit Secrets获取API密钥并初始化客户端
+    client = ZhipuAI(api_key=st.secrets["ZHIPU_API_KEY"])
 
 except Exception as e:
     st.error(f"AI服务初始化失败！请检查API密钥是否有效。错误: {e}")
     st.stop()
 
 
-# --- AI调用函数 ---
+# --- AI调用函数 (适配智谱AI) ---
 def generate_content(prompt):
-    """通用AI内容生成函数"""
+    """通用AI内容生成函数，使用智谱AI"""
     with st.spinner('🤖 AI正在思考中，请稍候...'):
         try:
-            response = model.generate_content(prompt)
-            return response.text
+            response = client.chat.completions.create(
+                model="glm-4-flash",  # 使用智谱AI的轻量级模型
+                messages=[
+                    {"role": "user", "content": prompt},
+                ],
+            )
+            # 提取返回内容
+            return response.choices[0].message.content
         except Exception as e:
             st.error(f"AI生成失败，请稍后重试。可能是API调用频率限制或内容安全策略导致。错误信息: {e}")
             return None
 
-# --- UI界面 ---
+# --- UI界面 (这部分保持不变) ---
 st.title("🧩 Java设计模式AI教学工具 (创建型模式)")
 st.caption("一个帮助你理解工厂方法、单例、原型模式的智能助手")
 
@@ -216,12 +216,10 @@ with tab3:
     if st.session_state.quiz_data:
         q = st.session_state.quiz_data
         
-        # 确保数据结构完整
         if all(k in q for k in ['scene', 'question', 'options', 'answer', 'explanation']):
             st.markdown(f"**场景：** {q['scene']}")
             st.markdown(f"**问题：** {q['question']}")
             
-            # 使用唯一key来重置选项
             radio_key = f"quiz_{q['scene']}" 
             
             options_list = [f"{key}: {value}" for key, value in q['options'].items()]
@@ -241,15 +239,14 @@ with tab3:
                     
                     for key, value in q['options'].items():
                         if key != q['answer']:
-                            explanation_key = f"incorrect_{key.upper()}"
-                            # 兼容大小写
-                            if explanation_key not in q['explanation']:
-                                explanation_key = f"incorrect_{key.lower()}"
+                            explanation_key_upper = f"incorrect_{key.upper()}"
+                            explanation_key_lower = f"incorrect_{key.lower()}"
                             
-                            if explanation_key in q['explanation']:
+                            explanation_text = q['explanation'].get(explanation_key_upper) or q['explanation'].get(explanation_key_lower)
+
+                            if explanation_text:
                                 st.markdown(f"---")
                                 st.markdown(f"❌ **为什么不选 {key} ({value})？**")
-                                st.write(q['explanation'][explanation_key])
-
+                                st.write(explanation_text)
         else:
             st.error("AI返回的题目数据结构不完整，请尝试重新生成。")
